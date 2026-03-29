@@ -25,6 +25,12 @@ local function collect_configs(config_name, path)
   local effective_root = root_mod.root(path)
   local workspace_data, ws_root, folders = workspace.resolve(path)
 
+  -- Fallback: if no project root, try .vscode directory (for fixtures, standalone configs)
+  if not effective_root then
+    local search_dir = vim.fn.isdirectory(path) == 1 and path or vim.fn.fnamemodify(path, ":h")
+    effective_root = workspace.find_vscode_root(search_dir)
+  end
+
   local configs = {}
   local added = {}
 
@@ -164,6 +170,10 @@ end
 ---@return table|nil { configurations: table[], compounds: table[] }
 function M.launch_configs(path)
   local effective_root = root_mod.root(path)
+  if not effective_root and path then
+    local search_dir = vim.fn.isdirectory(path) == 1 and path or vim.fn.fnamemodify(path, ":h")
+    effective_root = workspace.find_vscode_root(search_dir)
+  end
   local config_paths, workspace_data, ws_root = collect_configs("launch.json", path)
   local _, _, folders = workspace.resolve(path)
   local merged = merge_configs(
@@ -200,6 +210,10 @@ end
 ---@return table|nil { tasks: table[] }
 function M.task_configs(path)
   local effective_root = root_mod.root(path)
+  if not effective_root and path then
+    local search_dir = vim.fn.isdirectory(path) == 1 and path or vim.fn.fnamemodify(path, ":h")
+    effective_root = workspace.find_vscode_root(search_dir)
+  end
   local config_paths, workspace_data, ws_root = collect_configs("tasks.json", path)
   local _, _, folders = workspace.resolve(path)
   return merge_configs("tasks", config_paths, effective_root, workspace_data, ws_root, folders)
