@@ -22,14 +22,12 @@ local function collect_configs(config_name, path)
   if path == "" then path = vim.fn.getcwd() end
   path = vim.fn.fnamemodify(path, ":p")
 
-  local effective_root = root_mod.root(path)
   local workspace_data, ws_root, folders = workspace.resolve(path)
 
-  -- Fallback: if no project root, try .vscode directory (for fixtures, standalone configs)
-  if not effective_root then
-    local search_dir = vim.fn.isdirectory(path) == 1 and path or vim.fn.fnamemodify(path, ":h")
-    effective_root = workspace.find_vscode_root(search_dir)
-  end
+  -- For VS Code config collection, prefer .vscode root over .git root.
+  -- A fixture or standalone .vscode/ should take priority over a parent repo's .git.
+  local search_dir = vim.fn.isdirectory(path) == 1 and path or vim.fn.fnamemodify(path, ":h")
+  local effective_root = workspace.find_vscode_root(search_dir) or root_mod.root(path)
 
   local configs = {}
   local added = {}
