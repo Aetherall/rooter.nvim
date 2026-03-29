@@ -1,0 +1,9 @@
+{
+  "folders": [
+    { "path": "frontend", "name": "Frontend" },
+    { "path": "backend", "name": "Backend" }
+  ],
+  "settings": {
+    "editor.tabSize": 2
+  }
+}

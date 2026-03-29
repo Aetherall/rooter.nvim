@@ -1,0 +1,338 @@
+*rooter.txt*  Project root detection and VS Code workspace compatibility
+
+Author: Aetherall
+License: MIT
+
+==============================================================================
+CONTENTS                                                      *rooter-contents*
+
+  Introduction ............................................. |rooter|
+  Setup .................................................... |rooter.setup()|
+  Project root ............................................. |rooter-root|
+  Workspace folders ........................................ |rooter-workspace|
+  LSP integration .......................................... |rooter-lsp|
+  VS Code config ........................................... |rooter-vscode|
+  Events ................................................... |rooter-events|
+  Recipes .................................................. |rooter-recipes|
+
+==============================================================================
+INTRODUCTION                                                          *rooter*
+
+rooter.nvim answers two questions every development tool needs:
+"What project am I in?" and "How is it structured?"
+
+It provides:
+- Project root detection via `vim.fs.root()` with configurable markers
+- VS Code `.code-workspace` multi-root support
+- LSP integration (root_dir, settings injection, multi-root client reuse)
+- VS Code config reading (settings.json, launch.json, tasks.json)
+- Auto-cd on BufEnter with configurable scope
+- Safety guard: returns nil for ~, /, /tmp
+
+Quick start: >lua
+  require("rooter").setup()
+  vim.lsp.config("*", require("rooter").lsp())
+<
+
+==============================================================================
+SETUP                                                          *rooter.setup()*
+
+Configure rooter.nvim. All options are optional. >lua
+
+  require("rooter").setup({
+    markers = { ".git", "flake.nix", "package.json", "Cargo.toml",
+                "go.mod", "pyproject.toml", "Makefile" },
+    exclude = { "~", "/", "/tmp" },
+    auto_cd = true,       -- auto-cd on BufEnter (default: true)
+    cd_scope = "global",  -- "global" | "tab" | "window" (default: "global")
+  })
+<
+
+Parameters: ~
+  {markers}   `string[]`  Files/directories that indicate a project root.
+  {exclude}   `string[]`  Directories that are never project roots.
+  {auto_cd}   `boolean`   Auto-cd on BufEnter (default: true).
+  {cd_scope}  `string`    Scope of the cd command: "global", "tab", "window".
+
+==============================================================================
+PROJECT ROOT                                                     *rooter-root*
+
+                                                                *rooter.root()*
+rooter.root({path?})                                              *rooter.root*
+
+  Find the project root for a file path or the current context.
+
+  Resolution order:
+    1. `vim.fs.root(path, markers)` — nearest marker from the path.
+    2. `vim.fn.getcwd()` — if no path given and cwd is a project.
+    3. `nil` — not in a project.
+
+  If a path is given but no markers are found, returns nil (does not
+  fall back to cwd).
+
+  Parameters: ~
+    {path}  `string?`  File path to resolve from. If nil, uses current
+                        buffer, then cwd.
+
+  Returns: ~
+    `string|nil`  Absolute path to project root, or nil.
+
+  Example: >lua
+    rooter.root()  -- "/home/user/workspace/kraaft/monorepo"
+    rooter.root("~/random/file.txt")  -- nil
+<
+
+                                                                *rooter.name()*
+rooter.name({path?})                                              *rooter.name*
+
+  Last path segment of the project root.
+
+  Returns: ~
+    `string|nil`  Project name, or nil.
+
+  Example: >lua
+    rooter.name()  -- "monorepo"
+<
+
+                                                          *rooter.is_project()*
+rooter.is_project({dir})                                    *rooter.is_project*
+
+  Check if a directory has project markers. Returns false for excluded
+  directories.
+
+  Parameters: ~
+    {dir}  `string`  Absolute directory path.
+
+  Returns: ~
+    `boolean`
+
+                                                                 *rooter.has()*
+rooter.has({markers}, {path?})                                     *rooter.has*
+
+  Check if the project contains specific files or directories. Accepts a
+  string or a list of strings (checked in order, first match wins).
+  Searches from the project root.
+
+  Parameters: ~
+    {markers}  `string|string[]`  File/directory names, ordered by priority.
+    {path}     `string?`          File path to resolve the project from.
+
+  Returns: ~
+    `string|nil`  Absolute path to the first match, or nil.
+
+  Example: >lua
+    rooter.has(".git")                           -- "/home/.../project/.git"
+    rooter.has({ "biome.jsonc", "biome.json" })  -- "/home/.../biome.json"
+<
+
+                                                           *rooter.on_change()*
+rooter.on_change({callback})                                 *rooter.on_change*
+
+  Register a callback for project root changes. Fires when auto-cd
+  detects a new project root.
+
+  Parameters: ~
+    {callback}  `fun(root: string, prev_root: string|nil)`
+
+  Example: >lua
+    rooter.on_change(function(root, prev)
+      vim.notify("Switched to " .. root)
+    end)
+<
+
+  See also |rooter-events| for the `User RooterChanged` autocmd.
+
+==============================================================================
+WORKSPACE FOLDERS                                           *rooter-workspace*
+
+                                                             *rooter.folders()*
+rooter.folders({path?})                                       *rooter.folders*
+
+  Get workspace folders for the current context. If a `.code-workspace`
+  file exists, returns its folders. Otherwise returns a single-element
+  list with the project root.
+
+  Returns: ~
+    `{ path: string, name: string }[]`
+
+  Example: >lua
+    rooter.folders()
+    -- { {path="/home/.../frontend", name="Frontend"},
+    --   {path="/home/.../backend",  name="Backend"} }
+<
+
+                                                          *rooter.folder_for()*
+rooter.folder_for({path?})                                  *rooter.folder_for*
+
+  Find which workspace folder contains a given file. Falls back to
+  the project root if no `.code-workspace` exists.
+
+  Parameters: ~
+    {path}  `string?`  Absolute file path. Defaults to current buffer.
+
+  Returns: ~
+    `string|nil`  Absolute path of the containing folder.
+
+==============================================================================
+LSP INTEGRATION                                                   *rooter-lsp*
+
+                                                                 *rooter.lsp()*
+rooter.lsp({overrides?})                                           *rooter.lsp*
+
+  Returns a table with `root_dir`, `before_init`, and `reuse_client`
+  callbacks for |vim.lsp.config()|. Pass optional overrides to
+  deep-merge with the base config.
+
+  Parameters: ~
+    {overrides}  `table?`  Additional config (settings, capabilities, etc.)
+
+  Returns: ~
+    `table`  Config table for `vim.lsp.config()`.
+
+  Example: >lua
+    -- Apply to all servers:
+    vim.lsp.config("*", rooter.lsp())
+
+    -- Server-specific overrides:
+    vim.lsp.config("vtsls", rooter.lsp({
+      settings = { typescript = { tsserver = { maxTsServerMemory = 16384 } } },
+    }))
+<
+
+  root_dir resolution: ~
+    1. Workspace folder containing the buffer (from .code-workspace)
+    2. Workspace root (directory containing .code-workspace)
+    3. .vscode directory within the .git boundary
+    4. .git root
+    5. nil — LSP doesn't start (prevents indexing ~ or /home)
+
+  before_init: ~
+    - Injects settings from .vscode/settings.json for the LSP server.
+    - Sets workspace_folders to only the containing folder (not all).
+    - Installs workspace/configuration handler.
+
+  reuse_client: ~
+    - Reuses clients within the same .code-workspace.
+    - Lazily adds new folders via workspace/didChangeWorkspaceFolders.
+
+                                              *rooter.register_server_settings_prefix()*
+rooter.register_server_settings_prefix({name}, {prefix})
+
+  Register a custom VS Code setting prefix for an LSP server.
+
+  Parameters: ~
+    {name}    `string`  LSP server name (e.g., "my_custom_ls").
+    {prefix}  `string`  VS Code setting prefix (e.g., "myLanguage").
+
+  Built-in prefixes: ~
+    pyright→python, vtsls→typescript, lua_ls→Lua, biome→biome,
+    nixd→nix, gopls→gopls, rust_analyzer→rust-analyzer, and others.
+
+==============================================================================
+VS CODE CONFIG                                                 *rooter-vscode*
+
+All config functions return interpolated data. VS Code variables like
+`${workspaceFolder}`, `${env:HOME}`, `${config:key}` are expanded.
+
+                                                            *rooter.settings()*
+rooter.settings({path?})                                      *rooter.settings*
+
+  Get merged settings from .code-workspace + .vscode/settings.json.
+
+  Returns: ~
+    `table|nil`
+
+                                                      *rooter.launch_configs()*
+rooter.launch_configs({path?})                          *rooter.launch_configs*
+
+  Get merged launch configurations from all workspace folders.
+  Each configuration has a `__folder` field indicating its source.
+
+  Returns: ~
+    `table|nil`  `{ configurations: table[], compounds: table[] }`
+
+                                                        *rooter.task_configs()*
+rooter.task_configs({path?})                              *rooter.task_configs*
+
+  Get merged task configurations from all workspace folders.
+
+  Returns: ~
+    `table|nil`  `{ tasks: table[] }`
+
+==============================================================================
+EVENTS                                                       *rooter-events*
+
+                                                             *RooterChanged*
+User RooterChanged ~
+
+  Fires when the project root changes (via auto-cd). The event data
+  contains `{ root = "...", prev_root = "..." }`.
+
+  Example: >lua
+    vim.api.nvim_create_autocmd("User", {
+      pattern = "RooterChanged",
+      callback = function(args)
+        print("New root: " .. args.data.root)
+      end,
+    })
+<
+
+  See also |rooter.on_change()| for the Lua callback API.
+
+==============================================================================
+RECIPES                                                      *rooter-recipes*
+
+Session persistence with persistence.nvim ~
+                                                    *rooter-recipe-persistence*
+
+  Guard session save/restore by project root: >lua
+
+    local rooter = require("rooter")
+    local persistence = require("persistence")
+
+    -- Restore on VimEnter only if in a project
+    vim.api.nvim_create_autocmd("VimEnter", {
+      nested = true,
+      callback = function()
+        if vim.fn.argc() > 0 then return end
+        if rooter.root() then
+          persistence.load()
+          vim.notify("Session restored", vim.log.levels.INFO,
+            { title = rooter.name() })
+        end
+      end,
+    })
+
+    -- Save before project switch
+    rooter.on_change(function(_, prev)
+      if prev and persistence.active() then
+        persistence.save()
+      end
+    end)
+<
+
+Conditional tool detection ~
+                                                        *rooter-recipe-has*
+
+  Check if the project uses specific tools: >lua
+
+    if rooter.has({ "biome.jsonc", "biome.json" }) then
+      -- configure biome
+    end
+
+    if rooter.has("jest.config.ts") then
+      -- configure jest
+    end
+<
+
+Statusline ~
+                                                  *rooter-recipe-statusline*
+>lua
+    -- lualine component:
+    function()
+      return require("rooter").name() or ""
+    end
+<
+
+==============================================================================
+ vim:tw=78:ts=8:ft=help:norl:
